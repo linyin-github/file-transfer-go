@@ -60,16 +60,6 @@ export function useDesktopShareBusiness() {
     });
   }, [webRTC, handleRemoteStream]);
 
-  // 生成6位房间代码
-  const generateRoomCode = useCallback(() => {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
-    for (let i = 0; i < 6; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-  }, []);
-
   // 获取桌面共享流
   const getDesktopStream = useCallback(async (): Promise<MediaStream> => {
     try {
@@ -172,13 +162,32 @@ export function useDesktopShareBusiness() {
     };
   }, [webRTC]);
 
+  // 创建房间 - 统一使用后端生成房间码
+  const createRoomFromBackend = useCallback(async (): Promise<string> => {
+    const response = await fetch('/api/create-room', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}),
+    });
+
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.error || '创建房间失败');
+    }
+
+    return data.code;
+  }, []);
+
   // 创建房间（只建立连接，等待对方加入）
   const createRoom = useCallback(async (): Promise<string> => {
     try {
       updateState({ error: null, isWaitingForPeer: false });
 
-      // 生成房间代码
-      const roomCode = generateRoomCode();
+      // 从后端获取房间代码
+      const roomCode = await createRoomFromBackend();
       console.log('[DesktopShare] 🚀 创建桌面共享房间，代码:', roomCode);
 
       // 建立WebRTC连接（作为发送方）
@@ -199,7 +208,7 @@ export function useDesktopShareBusiness() {
       updateState({ error: errorMessage, connectionCode: '', isWaitingForPeer: false });
       throw error;
     }
-  }, [webRTC, generateRoomCode, updateState]);
+  }, [webRTC, createRoomFromBackend, updateState]);
 
   // 开始桌面共享（在接收方加入后）
   const startSharing = useCallback(async (): Promise<void> => {

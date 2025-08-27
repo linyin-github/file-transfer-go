@@ -23,7 +23,7 @@ func (h *Handler) HandleWebRTCWebSocket(w http.ResponseWriter, r *http.Request) 
 	h.webrtcService.HandleWebSocket(w, r)
 }
 
-// CreateRoomHandler 创建房间API
+// CreateRoomHandler 创建房间API - 简化版本，不处理无用参数
 func (h *Handler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	// 设置响应为JSON格式
 	w.Header().Set("Content-Type", "application/json")
@@ -36,7 +36,7 @@ func (h *Handler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 创建新房间
+	// 创建新房间（忽略请求体中的无用参数）
 	code := h.webrtcService.CreateNewRoom()
 	log.Printf("创建房间成功: %s", code)
 

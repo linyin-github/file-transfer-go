@@ -110,7 +110,7 @@ export function WebRTCFileReceive({
   }, [pickupCode, onJoinRoom]);
 
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value.replace(/[^A-Z0-9]/g, '').toUpperCase();
+    const value = e.target.value.replace(/[^123456789ABCDEFGHIJKLMNPQRSTUVWXYZabcdefghijklmnpqrstuvwxyz]/g, '');
     if (value.length <= 6) {
       setPickupCode(value);
     }

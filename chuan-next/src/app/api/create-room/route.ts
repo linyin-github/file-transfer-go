@@ -6,14 +6,14 @@ export async function POST(request: NextRequest) {
   try {
     console.log('API Route: Creating room, proxying to:', `${GO_BACKEND_URL}/api/create-room`);
     
-    const body = await request.json();
-    
+    // 不再需要解析和转发请求体，因为后端会忽略它们
     const response = await fetch(`${GO_BACKEND_URL}/api/create-room`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      // 发送空body即可
+      body: JSON.stringify({}),
     });
 
     const data = await response.json();

@@ -76,6 +76,34 @@ func (ws *WebRTCService) HandleWebSocket(w http.ResponseWriter, r *http.Request)
 
 	if code == "" || (role != "sender" && role != "receiver") {
 		log.Printf("WebRTC连接参数无效: code=%s, role=%s", code, role)
+		conn.WriteJSON(map[string]interface{}{
+			"type":    "error",
+			"message": "连接参数无效",
+		})
+		return
+	}
+
+	// 验证房间是否存在
+	ws.roomsMux.RLock()
+	room := ws.rooms[code]
+	ws.roomsMux.RUnlock()
+
+	if room == nil {
+		log.Printf("房间不存在: %s", code)
+		conn.WriteJSON(map[string]interface{}{
+			"type":    "error",
+			"message": "房间不存在或已过期",
+		})
+		return
+	}
+
+	// 检查房间是否已过期
+	if time.Now().After(room.ExpiresAt) {
+		log.Printf("房间已过期: %s", code)
+		conn.WriteJSON(map[string]interface{}{
+			"type":    "error",
+			"message": "房间已过期",
+		})
 		return
 	}
 
@@ -127,13 +155,8 @@ func (ws *WebRTCService) addClientToRoom(code string, client *WebRTCClient) {
 
 	room := ws.rooms[code]
 	if room == nil {
-		room = &WebRTCRoom{
-			Code:      code,
-			CreatedAt: time.Now(),
-			ExpiresAt: time.Now().Add(time.Hour), // 1小时后过期
-		}
-		ws.rooms[code] = room
-		log.Printf("自动创建WebRTC房间: %s", code)
+		log.Printf("尝试加入不存在的WebRTC房间: %s", code)
+		return
 	}
 
 	if client.Role == "sender" {
@@ -253,19 +276,39 @@ func (ws *WebRTCService) CreateRoom(code string) {
 	}
 }
 
-// CreateNewRoom 创建新房间并返回房间码
+// CreateNewRoom 创建新房间并返回房间码 - 确保不重复
 func (ws *WebRTCService) CreateNewRoom() string {
-	code := ws.generatePickupCode()
+	var code string
+
+	// 生成唯一房间码，确保不重复
+	for {
+		code = ws.generatePickupCode()
+		ws.roomsMux.RLock()
+		_, exists := ws.rooms[code]
+		ws.roomsMux.RUnlock()
+
+		if !exists {
+			break // 找到了不重复的代码
+		}
+		// 如果重复了，继续生成新的
+	}
+
 	ws.CreateRoom(code)
 	return code
 }
 
-// generatePickupCode 生成6位取件码
+// generatePickupCode 生成6位取件码 - 统一规则：只使用大写字母和数字，排除0和O避免混淆
 func (ws *WebRTCService) generatePickupCode() string {
+	// 只使用大写字母和数字，排除容易混淆的字符：数字0和字母O
+	chars := "123456789ABCDEFGHIJKLMNPQRSTUVWXYZ"
 	source := rand.NewSource(time.Now().UnixNano())
 	rng := rand.New(source)
-	code := rng.Intn(900000) + 100000
-	return fmt.Sprintf("%d", code)
+
+	result := make([]byte, 6)
+	for i := 0; i < 6; i++ {
+		result[i] = chars[rng.Intn(len(chars))]
+	}
+	return string(result)
 }
 
 // cleanupExpiredRooms 定期清理过期房间

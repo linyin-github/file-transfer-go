@@ -309,21 +309,14 @@ export const WebRTCFileTransfer: React.FC = () => {
       console.log('=== 创建房间 ===');
       console.log('选中文件数:', selectedFiles.length);
       
-      // 创建后端房间
+      // 创建后端房间 - 简化版本，不发送无用的文件信息
       const response = await fetch('/api/create-room', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          type: 'file',
-          files: selectedFiles.map(file => ({
-            name: file.name,
-            size: file.size,
-            type: file.type,
-            lastModified: file.lastModified
-          }))
-        }),
+        // 不再发送文件列表，因为后端不使用这些信息
+        body: JSON.stringify({}),
       });
 
       const data = await response.json();

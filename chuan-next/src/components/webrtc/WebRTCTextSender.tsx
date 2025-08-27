@@ -115,21 +115,14 @@ export const WebRTCTextSender: React.FC<WebRTCTextSenderProps> = ({ onRestart, o
       console.log('=== 开始创建房间 ===');
       const currentText = textInput.trim();
       
+      // 创建后端房间 - 简化版本，不发送无用的文本信息
       const response = await fetch('/api/create-room', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          type: 'message',
-          initialText: currentText || '', 
-          hasImages: false,
-          maxFileSize: 5 * 1024 * 1024,
-          settings: {
-            enableRealTimeText: true,
-            enableImageTransfer: true
-          }
-        }),
+        // 不再发送文本内容，因为后端不使用这些信息
+        body: JSON.stringify({}),
       });
 
       const data = await response.json();

@@ -11,23 +11,6 @@ interface ApiResponse {
   data?: unknown;
 }
 
-interface CreateRoomData {
-  type?: string;
-  content?: string;
-  password?: string;
-}
-
-interface CreateTextRoomData {
-  type: string;
-  content: string;
-  password?: string;
-}
-
-interface UpdateFilesData {
-  roomId: string;
-  files: File[];
-}
-
 export class ClientAPI {
   private baseUrl: string;
 
@@ -94,20 +77,10 @@ export class ClientAPI {
   }
 
   /**
-   * 创建房间（统一接口）
+   * 创建房间（简化版本）- 后端会忽略传入的参数
    */
-  async createRoom(data: CreateRoomData): Promise<ApiResponse> {
-    return this.post('/api/create-room', data);
-  }
-
-  /**
-   * 创建文本房间
-   */
-  async createTextRoom(content: string): Promise<ApiResponse> {
-    return this.post('/api/create-room', {
-      type: 'text',
-      content: content
-    });
+  async createRoom(): Promise<ApiResponse> {
+    return this.post('/api/create-room', {});
   }
 
   /**
@@ -139,13 +112,6 @@ export class ClientAPI {
    */
   async getWebRTCRoomStatus(code: string): Promise<ApiResponse> {
     return this.get(`/api/webrtc-room-status?code=${code}`);
-  }
-
-  /**
-   * 更新文件
-   */
-  async updateFiles(data: UpdateFilesData): Promise<ApiResponse> {
-    return this.post('/api/update-files', data);
   }
 }
 

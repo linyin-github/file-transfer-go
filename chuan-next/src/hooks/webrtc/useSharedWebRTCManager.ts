@@ -9,6 +9,7 @@ interface WebRTCState {
   isWebSocketConnected: boolean;
   isPeerConnected: boolean;  // 新增：P2P连接状态
   error: string | null;
+  canRetry: boolean;  // 新增：是否可以重试
 }
 
 // 消息类型
@@ -30,10 +31,12 @@ export interface WebRTCConnection {
   isWebSocketConnected: boolean;
   isPeerConnected: boolean;  // 新增：P2P连接状态
   error: string | null;
+  canRetry: boolean;  // 新增：是否可以重试
 
   // 操作方法
   connect: (roomCode: string, role: 'sender' | 'receiver') => Promise<void>;
   disconnect: () => void;
+  retry: () => Promise<void>;  // 新增：重试连接方法
   sendMessage: (message: WebRTCMessage, channel?: string) => boolean;
   sendData: (data: ArrayBuffer) => boolean;
 
@@ -71,6 +74,9 @@ export function useSharedWebRTCManager(): WebRTCConnection {
 
   // 当前连接的房间信息
   const currentRoom = useRef<{ code: string; role: 'sender' | 'receiver' } | null>(null);
+  
+  // 用于跟踪是否是用户主动断开连接
+  const isUserDisconnecting = useRef<boolean>(false);
 
   // 多通道消息处理器
   const messageHandlers = useRef<Map<string, MessageHandler>>(new Map());
@@ -112,6 +118,7 @@ export function useSharedWebRTCManager(): WebRTCConnection {
     }
 
     currentRoom.current = null;
+    isUserDisconnecting.current = false;  // 重置主动断开标志
   }, []);
 
   // 创建 Offer
@@ -153,7 +160,7 @@ export function useSharedWebRTCManager(): WebRTCConnection {
       }
     } catch (error) {
       console.error('[SharedWebRTC] ❌ 创建 offer 失败:', error);
-      updateState({ error: '创建连接失败', isConnecting: false });
+      updateState({ error: '创建连接失败', isConnecting: false, canRetry: true });
     }
   }, [updateState]);
 
@@ -209,6 +216,9 @@ export function useSharedWebRTCManager(): WebRTCConnection {
     currentRoom.current = { code: roomCode, role };
     webrtcStore.setCurrentRoom({ code: roomCode, role });
     updateState({ isConnecting: true, error: null });
+    
+    // 重置主动断开标志
+    isUserDisconnecting.current = false;
 
     // 注意：不在这里设置超时，因为WebSocket连接很快，
     // WebRTC连接的建立是在后续添加轨道时进行的
@@ -326,7 +336,27 @@ export function useSharedWebRTCManager(): WebRTCConnection {
 
             case 'error':
               console.error('[SharedWebRTC] ❌ 信令服务器错误:', message.error);
-              updateState({ error: message.error, isConnecting: false });
+              updateState({ error: message.error, isConnecting: false, canRetry: true });
+              break;
+
+            case 'disconnection':
+              console.log('[SharedWebRTC] 🔌 对方主动断开连接');
+              // 对方断开连接的处理
+              updateState({ 
+                isPeerConnected: false,
+                isConnected: false,  // 添加这个状态
+                error: '对方已离开房间',
+                canRetry: true 
+              });
+              // 清理P2P连接但保持WebSocket连接，允许重新连接
+              if (pcRef.current) {
+                pcRef.current.close();
+                pcRef.current = null;
+              }
+              if (dcRef.current) {
+                dcRef.current.close();
+                dcRef.current = null;
+              }
               break;
 
             default:
@@ -334,20 +364,29 @@ export function useSharedWebRTCManager(): WebRTCConnection {
           }
         } catch (error) {
           console.error('[SharedWebRTC] ❌ 处理信令消息失败:', error);
-          updateState({ error: '信令处理失败: ' + error, isConnecting: false });
+          updateState({ error: '信令处理失败: ' + error, isConnecting: false, canRetry: true });
         }
       };
 
       ws.onerror = (error) => {
         console.error('[SharedWebRTC] ❌ WebSocket 错误:', error);
-        updateState({ error: 'WebSocket连接失败，请检查服务器是否运行在8080端口', isConnecting: false });
+        updateState({ error: 'WebSocket连接失败', isConnecting: false, canRetry: true });
       };
 
       ws.onclose = (event) => {
         console.log('[SharedWebRTC] 🔌 WebSocket 连接已关闭, 代码:', event.code, '原因:', event.reason);
         updateState({ isWebSocketConnected: false });
+        
+        // 检查是否是用户主动断开
+        if (isUserDisconnecting.current) {
+          console.log('[SharedWebRTC] ✅ 用户主动断开，正常关闭');
+          // 用户主动断开时不显示错误消息
+          return;
+        }
+        
+        // 只有在非正常关闭且不是用户主动断开时才显示错误
         if (event.code !== 1000 && event.code !== 1001) { // 非正常关闭
-          updateState({ error: `WebSocket异常关闭 (${event.code}): ${event.reason || '未知原因'}`, isConnecting: false });
+          updateState({ error: `WebSocket异常关闭 (${event.code}): ${event.reason || '连接意外断开'}`, isConnecting: false, canRetry: true });
         }
       };
 
@@ -376,7 +415,7 @@ export function useSharedWebRTCManager(): WebRTCConnection {
             break;
           case 'failed':
             console.error('[SharedWebRTC] ❌ ICE连接失败');
-            updateState({ error: 'ICE连接失败，可能是网络防火墙阻止了连接', isConnecting: false });
+            updateState({ error: 'ICE连接失败，可能是网络防火墙阻止了连接', isConnecting: false, canRetry: true });
             break;
           case 'disconnected':
             console.log('[SharedWebRTC] 🔌 ICE连接断开');
@@ -396,14 +435,14 @@ export function useSharedWebRTCManager(): WebRTCConnection {
             break;
           case 'connected':
             console.log('[SharedWebRTC] 🎉 WebRTC P2P连接已完全建立，可以进行媒体传输');
-            updateState({ isPeerConnected: true, error: null });
+            updateState({ isPeerConnected: true, error: null, canRetry: false });
             break;
           case 'failed':
             // 只有在数据通道也未打开的情况下才认为连接真正失败
             const currentDc = dcRef.current;
             if (!currentDc || currentDc.readyState !== 'open') {
               console.error('[SharedWebRTC] ❌ WebRTC连接失败，数据通道未建立');
-              updateState({ error: 'WebRTC连接失败，请检查网络设置或重试', isPeerConnected: false });
+              updateState({ error: 'WebRTC连接失败，请检查网络设置或重试', isPeerConnected: false, canRetry: true });
             } else {
               console.log('[SharedWebRTC] ⚠️ WebRTC连接状态为failed，但数据通道正常，忽略此状态');
             }
@@ -429,14 +468,59 @@ export function useSharedWebRTCManager(): WebRTCConnection {
 
         dataChannel.onopen = () => {
           console.log('[SharedWebRTC] 数据通道已打开 (发送方)');
-          updateState({ isPeerConnected: true, error: null, isConnecting: false });
+          updateState({ isPeerConnected: true, error: null, isConnecting: false, canRetry: false });
         };
 
         dataChannel.onmessage = handleDataChannelMessage;
 
         dataChannel.onerror = (error) => {
           console.error('[SharedWebRTC] 数据通道错误:', error);
-          updateState({ error: '数据通道连接失败，可能是网络环境受限', isConnecting: false });
+          
+          // 获取更详细的错误信息
+          let errorMessage = '数据通道连接失败';
+          let shouldRetry = false;
+          
+          // 根据数据通道状态提供更具体的错误信息
+          switch (dataChannel.readyState) {
+            case 'connecting':
+              errorMessage = '数据通道正在连接中，请稍候...';
+              shouldRetry = true;
+              break;
+            case 'closing':
+              errorMessage = '数据通道正在关闭，连接即将断开';
+              break;
+            case 'closed':
+              errorMessage = '数据通道已关闭，P2P连接失败';
+              shouldRetry = true;
+              break;
+            default:
+              // 检查PeerConnection状态
+              const pc = pcRef.current;
+              if (pc) {
+                switch (pc.connectionState) {
+                  case 'failed':
+                    errorMessage = 'P2P连接失败，可能是网络防火墙阻止了连接，请尝试切换网络或使用VPN';
+                    shouldRetry = true;
+                    break;
+                  case 'disconnected':
+                    errorMessage = 'P2P连接已断开，网络可能不稳定';
+                    shouldRetry = true;
+                    break;
+                  default:
+                    errorMessage = '数据通道连接失败，可能是网络环境受限';
+                    shouldRetry = true;
+                }
+              }
+          }
+          
+          console.error(`[SharedWebRTC] 数据通道详细错误 - 状态: ${dataChannel.readyState}, 消息: ${errorMessage}, 建议重试: ${shouldRetry}`);
+          
+          updateState({ 
+            error: errorMessage, 
+            isConnecting: false,
+            isPeerConnected: false,  // 数据通道出错时，P2P连接肯定不可用
+            canRetry: shouldRetry    // 设置是否可以重试
+          });
         };
       } else {
         pc.ondatachannel = (event) => {
@@ -445,14 +529,59 @@ export function useSharedWebRTCManager(): WebRTCConnection {
 
           dataChannel.onopen = () => {
             console.log('[SharedWebRTC] 数据通道已打开 (接收方)');
-            updateState({ isPeerConnected: true, error: null, isConnecting: false });
+            updateState({ isPeerConnected: true, error: null, isConnecting: false, canRetry: false });
           };
 
           dataChannel.onmessage = handleDataChannelMessage;
 
           dataChannel.onerror = (error) => {
-            console.error('[SharedWebRTC] 数据通道错误:', error);
-            updateState({ error: '数据通道连接失败，可能是网络环境受限', isConnecting: false });
+            console.error('[SharedWebRTC] 数据通道错误 (接收方):', error);
+            
+            // 获取更详细的错误信息
+            let errorMessage = '数据通道连接失败';
+            let shouldRetry = false;
+            
+            // 根据数据通道状态提供更具体的错误信息
+            switch (dataChannel.readyState) {
+              case 'connecting':
+                errorMessage = '数据通道正在连接中，请稍候...';
+                shouldRetry = true;
+                break;
+              case 'closing':
+                errorMessage = '数据通道正在关闭，连接即将断开';
+                break;
+              case 'closed':
+                errorMessage = '数据通道已关闭，P2P连接失败';
+                shouldRetry = true;
+                break;
+              default:
+                // 检查PeerConnection状态
+                const pc = pcRef.current;
+                if (pc) {
+                  switch (pc.connectionState) {
+                    case 'failed':
+                      errorMessage = 'P2P连接失败，可能是网络防火墙阻止了连接，请尝试切换网络或使用VPN';
+                      shouldRetry = true;
+                      break;
+                    case 'disconnected':
+                      errorMessage = 'P2P连接已断开，网络可能不稳定';
+                      shouldRetry = true;
+                      break;
+                    default:
+                      errorMessage = '数据通道连接失败，可能是网络环境受限';
+                      shouldRetry = true;
+                  }
+                }
+            }
+            
+            console.error(`[SharedWebRTC] 数据通道详细错误 (接收方) - 状态: ${dataChannel.readyState}, 消息: ${errorMessage}, 建议重试: ${shouldRetry}`);
+            
+            updateState({ 
+              error: errorMessage, 
+              isConnecting: false,
+              isPeerConnected: false,  // 数据通道出错时，P2P连接肯定不可用
+              canRetry: shouldRetry    // 设置是否可以重试
+            });
           };
         };
       }
@@ -474,17 +603,57 @@ export function useSharedWebRTCManager(): WebRTCConnection {
       console.error('[SharedWebRTC] 连接失败:', error);
       updateState({
         error: error instanceof Error ? error.message : '连接失败',
-        isConnecting: false
+        isConnecting: false,
+        canRetry: true
       });
     }
   }, [updateState, cleanup, createOffer, handleDataChannelMessage, webrtcStore.isConnecting, webrtcStore.isConnected]);
 
   // 断开连接
   const disconnect = useCallback(() => {
-    console.log('[SharedWebRTC] 断开连接');
+    console.log('[SharedWebRTC] 主动断开连接');
+    
+    // 设置主动断开标志
+    isUserDisconnecting.current = true;
+    
+    // 在断开之前通知对方
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ 
+          type: 'disconnection', 
+          payload: { reason: '用户主动断开' }
+        }));
+        console.log('[SharedWebRTC] 📤 已通知对方断开连接');
+      } catch (error) {
+        console.warn('[SharedWebRTC] 发送断开通知失败:', error);
+      }
+    }
+    
+    // 清理连接
     cleanup();
-    webrtcStore.reset();
+    
+    // 主动断开时，将状态完全重置为初始状态（没有任何错误或消息）
+    webrtcStore.resetToInitial();
   }, [cleanup, webrtcStore]);
+
+  // 重试连接
+  const retry = useCallback(async () => {
+    const room = currentRoom.current;
+    if (!room) {
+      console.warn('[SharedWebRTC] 没有当前房间信息，无法重试');
+      updateState({ error: '无法重试连接：缺少房间信息', canRetry: false });
+      return;
+    }
+    
+    console.log('[SharedWebRTC] 🔄 重试连接到房间:', room.code, room.role);
+    
+    // 清理当前连接
+    cleanup();
+    
+    // 重新连接
+    await connect(room.code, room.role);
+  }, [cleanup, connect, updateState]);
 
   // 发送消息
   const sendMessage = useCallback((message: WebRTCMessage, channel?: string) => {
@@ -642,10 +811,12 @@ export function useSharedWebRTCManager(): WebRTCConnection {
     isWebSocketConnected: webrtcStore.isWebSocketConnected,
     isPeerConnected: webrtcStore.isPeerConnected,
     error: webrtcStore.error,
+    canRetry: webrtcStore.canRetry,
 
     // 操作方法
     connect,
     disconnect,
+    retry,
     sendMessage,
     sendData,
 
