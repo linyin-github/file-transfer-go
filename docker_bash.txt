@@ -1,0 +1,3 @@
+docker build -t llinyin789456/file-transfer-go:latest .
+docker login
+docker push llinyin789456/file-transfer-go:latest
